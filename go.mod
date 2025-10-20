@@ -1,8 +1,8 @@
 module github.com/danielpaulus/go-ios
 
-go 1.22.0
+go 1.24.0
 
-toolchain go1.22.5
+toolchain go1.24.7
 
 require (
 	github.com/Masterminds/semver v1.5.0
@@ -21,7 +21,7 @@ require (
 	golang.org/x/crypto v0.24.0
 	golang.org/x/exp v0.0.0-20230725093048-515e97ebf090
 	golang.org/x/net v0.26.0
-	golang.org/x/sys v0.21.0
+	golang.org/x/sys v0.32.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	gvisor.dev/gvisor v0.0.0-20240405191320-0878b34101b5
 	howett.net/plist v0.0.0-20200419221736-3b63eb3a43b5
@@ -35,7 +35,7 @@ require (
 	github.com/frankban/quicktest v1.14.6 // indirect
 	github.com/go-task/slim-sprig v0.0.0-20230315185526-52ccab3ef572 // indirect
 	github.com/google/btree v1.1.2 // indirect
-	github.com/google/pprof v0.0.0-20210407192527-94a9f03dee38 // indirect
+	github.com/google/pprof v0.0.0-20250923004556-9e5a51aed1e8 // indirect
 	github.com/miekg/dns v1.1.57 // indirect
 	github.com/onsi/ginkgo/v2 v2.9.5 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect

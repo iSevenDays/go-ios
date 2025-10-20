@@ -1,6 +1,7 @@
 package zipconduit
 
 import (
+	"archive/zip"
 	"encoding/binary"
 	"hash/crc32"
 	"io"
@@ -181,24 +182,36 @@ func (conn Connection) sendDirectory(dir string) error {
 }
 
 func (conn Connection) sendIpaFile(ipaFile string) error {
+	// Open the IPA (ZIP) file for reading
+	zipReader, err := zip.OpenReader(ipaFile)
+	if err != nil {
+		return err
+	}
+	defer zipReader.Close()
+
+	// Calculate total uncompressed size and count files
+	var totalBytes uint64
+	fileCount := 0
+	for _, f := range zipReader.File {
+		totalBytes += f.UncompressedSize64
+		fileCount++
+	}
+
+	// Create temporary directory only for metainf
 	tmpDir, err := os.MkdirTemp("", "prefix")
 	if err != nil {
 		return err
 	}
-	log.Debugf("created tempdir: %s", tmpDir)
+	log.Debugf("created tempdir for metainf: %s", tmpDir)
 	defer func() {
 		err := os.RemoveAll(tmpDir)
 		if err != nil {
 			log.WithFields(log.Fields{"dir": tmpDir}).Warn("failed removing tempdir")
 		}
 	}()
-	log.Debug("unzipping..")
-	unzippedFiles, totalBytes, err := ios.Unzip(ipaFile, tmpDir)
-	if err != nil {
-		return err
-	}
 
-	metainfFolder, metainfFile, err := addMetaInf(tmpDir, unzippedFiles, totalBytes)
+	// Create metainf with file count from ZIP
+	metainfFolder, metainfFile, err := addMetaInfForZip(tmpDir, fileCount, totalBytes)
 	if err != nil {
 		return err
 	}
@@ -226,10 +239,11 @@ func (conn Connection) sendIpaFile(ipaFile string) error {
 	}
 	log.Debug("meta inf send successfully")
 
-	log.Debug("sending files....")
+	log.Debug("sending files from IPA archive....")
 
-	for _, file := range unzippedFiles {
-		err := AddFileToZip(conn.deviceConn, file, tmpDir)
+	// Stream files directly from ZIP archive
+	for _, f := range zipReader.File {
+		err := conn.addZipFileToStream(f)
 		if err != nil {
 			return err
 		}
@@ -282,6 +296,69 @@ func addMetaInf(metainfPath string, files []string, totalBytes uint64) (string, 
 	return folderPath, filePath, nil
 }
 
+func addMetaInfForZip(metainfPath string, fileCount int, totalBytes uint64) (string, string, error) {
+	folderPath := path.Join(metainfPath, "META-INF")
+	ret, _ := ios.PathExists(folderPath)
+	if !ret {
+		err := os.Mkdir(folderPath, 0o777)
+		if err != nil {
+			return "", "", err
+		}
+	}
+	// recordcount == files + meta-inf + metainffile
+	meta := metadata{RecordCount: 2 + fileCount, StandardDirectoryPerms: 16877, StandardFilePerms: -32348, TotalUncompressedBytes: totalBytes, Version: 2}
+	metaBytes := ios.ToPlistBytes(meta)
+	filePath := path.Join(metainfPath, "META-INF", metainfFileName)
+	err := os.WriteFile(filePath, metaBytes, 0o777)
+	if err != nil {
+		return "", "", err
+	}
+	return folderPath, filePath, nil
+}
+
+// addZipFileToStream streams a file directly from the ZIP archive to the device
+// using the pre-computed CRC32 from the ZIP metadata
+func (conn Connection) addZipFileToStream(f *zip.File) error {
+	// Handle directories
+	if f.FileInfo().IsDir() {
+		header, name, extra := newZipHeaderDir(f.Name)
+		if err := binary.Write(conn.deviceConn, binary.LittleEndian, header); err != nil {
+			return err
+		}
+		if err := binary.Write(conn.deviceConn, binary.BigEndian, name); err != nil {
+			return err
+		}
+		return binary.Write(conn.deviceConn, binary.BigEndian, extra)
+	}
+
+	// Open file from ZIP archive
+	rc, err := f.Open()
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+
+	// Use pre-computed CRC32 from ZIP metadata
+	crc := f.CRC32
+
+	// Write ZIP header with pre-computed CRC
+	header, name, extra := newZipHeader(uint32(f.UncompressedSize64), crc, f.Name)
+	if err := binary.Write(conn.deviceConn, binary.LittleEndian, header); err != nil {
+		return err
+	}
+	if err := binary.Write(conn.deviceConn, binary.BigEndian, name); err != nil {
+		return err
+	}
+	if err := binary.Write(conn.deviceConn, binary.BigEndian, extra); err != nil {
+		return err
+	}
+
+	// Stream file content directly to device with a small buffer
+	buf := make([]byte, 32*1024) // 32KB buffer
+	_, err = io.CopyBuffer(conn.deviceConn, rc, buf)
+	return err
+}
+
 func AddFileToZip(writer io.Writer, filename string, tmpdir string) error {
 	fileToZip, err := os.Open(filename)
 	if err != nil {
@@ -325,7 +402,8 @@ func AddFileToZip(writer io.Writer, filename string, tmpdir string) error {
 		return err
 	}
 
-	crc, err := calculateCrc32(fileToZip)
+	// Calculate CRC32 for files extracted to temp directory
+	crc, err := calculateCrc32ForFile(fileToZip)
 	if err != nil {
 		return err
 	}
@@ -348,9 +426,12 @@ func AddFileToZip(writer io.Writer, filename string, tmpdir string) error {
 	return err
 }
 
-func calculateCrc32(reader io.Reader) (uint32, error) {
+// calculateCrc32ForFile calculates CRC32 for files that are already extracted to temp directory
+// This is only used for sendDirectory, not for IPA files which use pre-computed CRC32 from ZIP metadata
+func calculateCrc32ForFile(file *os.File) (uint32, error) {
 	hash := crc32.New(crc32.IEEETable)
-	if _, err := io.Copy(hash, reader); err != nil {
+	// Use io.Copy which handles buffering efficiently
+	if _, err := io.Copy(hash, file); err != nil {
 		return 0, err
 	}
 	return hash.Sum32(), nil

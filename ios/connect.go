@@ -133,6 +133,9 @@ func ConnectToXpcServiceTunnelIface(device DeviceEntry, serviceName string) (*xp
 	if !device.SupportsRsd() {
 		return nil, fmt.Errorf("ConnectToXpcServiceTunnelIface: Cannot connect to %s, missing tunnel address and RSD port. To start the tunnel, run `ios tunnel start`", serviceName)
 	}
+	if device.Rsd == nil {
+		return nil, fmt.Errorf("ConnectToXpcServiceTunnelIface: Cannot connect to %s, tunnel not available", serviceName)
+	}
 	port := device.Rsd.GetPort(serviceName)
 
 	conn, err := ConnectTUNDevice(device.Address, port, device)
